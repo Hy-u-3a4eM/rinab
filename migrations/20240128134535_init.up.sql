@@ -14,9 +14,9 @@ CREATE TABLE
         created_at TIMESTAMP
         WITH
             TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP
+        updated_at TIMESTAMP
         WITH
-            TIME ZONE DEFAULT NOW()
+            TIME ZONE DEFAULT NOW(),
     );
 
 CREATE INDEX users_email_idx ON users (email);
