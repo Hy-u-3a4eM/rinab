@@ -6,10 +6,7 @@ use serde::Serialize;
 pub struct FilteredUser {
     pub id: String,
     pub name: String,
-    pub email: String,
-    pub role: String,
-    pub photo: String,
-    pub verified: bool,
+    pub username: String,
     pub createdAt: DateTime<Utc>,
     pub updatedAt: DateTime<Utc>,
 }

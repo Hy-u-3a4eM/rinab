@@ -8,6 +8,10 @@
 
 mod handler;
 mod route;
+mod response;
+mod model;
+mod authorization;
+mod config;
 
 use axum::{
     async_trait,
@@ -34,6 +38,8 @@ use std::{fmt::Display, sync::Arc};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use sqlx::{pool::PoolOptions, postgres::PgPoolOptions, PgPool, Pool, Postgres};
 use tower_http::cors::CorsLayer;
+use crate::config::Config;
+use crate::model::TokenClaims;
 
 use crate::route::create_router;
 
@@ -68,12 +74,6 @@ static KEYS: Lazy<Keys> = Lazy::new(|| {
     Keys::new(secret.as_bytes())
 });
 
-impl Display for Claims {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Email: {}\nCompany: {}", self.sub, self.company)
-    }
-}
-
 impl AuthBody {
     fn new(access_token: String) -> Self {
         Self {
@@ -84,7 +84,7 @@ impl AuthBody {
 }
 
 #[async_trait]
-impl<S> FromRequestParts<S> for Claims
+impl<S> FromRequestParts<S> for TokenClaims
 where
     S: Send + Sync,
 {
@@ -97,7 +97,7 @@ where
             .await
             .map_err(|_| AuthError::InvalidToken)?;
         // Decode the user data
-        let token_data = decode::<Claims>(bearer.token(), &KEYS.decoding, &Validation::default())
+        let token_data = decode::<TokenClaims>(bearer.token(), &KEYS.decoding, &Validation::default())
             .map_err(|_| AuthError::InvalidToken)?;
 
         Ok(token_data.claims)
@@ -134,23 +134,10 @@ impl Keys {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    sub: String,
-    company: String,
-    exp: usize,
-}
-
 #[derive(Debug, Serialize)]
 struct AuthBody {
     access_token: String,
     token_type: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Authlogin {
-    username: String,
-    password: String,
 }
 
 #[derive(Debug)]
@@ -162,16 +149,9 @@ enum AuthError {
     Database(sqlx::Error),
 }
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize)]
-struct User {
-    id: i32,
-    username: String,
-    password: String,
-}
-
 pub struct AppState {
     db_pool: Pool<Postgres>,
-    //env: Config,
+    env: Config,
     //redis_client: Client,
 }
 
@@ -188,7 +168,7 @@ async fn main() {
     // Создаем пул подключений к базе данных
     let pool = PgPoolOptions::new()
         .max_connections(5)
-        .connect("postgres://postgres:aboba@localhost:5432/rinab")
+        .connect("postgres://postgres:aboba@127.0.0.1:5432/rinab")
         .await
         .unwrap();
 

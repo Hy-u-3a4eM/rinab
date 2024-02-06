@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use axum::{
-    extract::State, Json
-};
+use axum::{Extension, extract::State, Json};
+use axum::response::IntoResponse;
 use jsonwebtoken::{encode, Header};
 use crate::{AppState, AuthBody, AuthError, Authlogin, Claims, User, KEYS};
+use crate::model::User;
+use crate::response::FilteredUser;
 
-pub async fn login(State(data): State<Arc<AppState>>, Json(login): Json<Authlogin>) -> Result<Json<AuthBody>, AuthError> {
+pub async fn login(State(data): State<Arc<AppState>>, Json(login): Json<Authlogin>) -> Result<impl IntoResponse, AuthError> {
     // Получаем пользователя по имени из базы данных
     let user = sqlx::query_as::<_, User>(
         "SELECT id, username, password FROM users WHERE username = $1",
@@ -37,9 +38,25 @@ pub async fn login(State(data): State<Arc<AppState>>, Json(login): Json<Authlogi
     Ok(Json(AuthBody::new(token)))
 }
 
-pub async fn get_user(State(data): State<Arc<AppState>>, claims: Claims) -> Result<String, AuthError> {
-    // Send the user data to the user
-    Ok(format!(
-        "Welcome to the user area :)\nYour data:\n{claims}",
-    ))
+pub async fn get_me_handler(
+    Extension(user): Extension<User>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let json_response = serde_json::json!({
+        "status":  "success",
+        "data": serde_json::json!({
+            "user": filter_user_record(&user)
+        })
+    });
+
+    Ok(Json(json_response))
+}
+
+fn filter_user_record(user: &User) -> FilteredUser {
+    FilteredUser {
+        id: user.id.to_string(),
+        username: user.username.to_owned(),
+        name: user.name.to_owned(),
+        createdAt: user.created_at.unwrap(),
+        updatedAt: user.updated_at.unwrap(),
+    }
 }

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct User {
     pub id: uuid::Uuid,
     pub name: String,
-    pub email: String,
+    pub username: String,
     pub password: String,
     pub role: String,
     pub photo: String,
