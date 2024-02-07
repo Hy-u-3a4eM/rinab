@@ -12,6 +12,7 @@ mod response;
 mod model;
 mod authorization;
 mod config;
+mod into_response;
 
 use axum::{
     async_trait,
@@ -69,11 +70,6 @@ use crate::route::create_router;
 //     -H 'Authorization: Bearer blahblahblah' \
 //     http://localhost:3000/user
 
-static KEYS: Lazy<Keys> = Lazy::new(|| {
-    let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
-    Keys::new(secret.as_bytes())
-});
-
 impl AuthBody {
     fn new(access_token: String) -> Self {
         Self {
@@ -83,70 +79,10 @@ impl AuthBody {
     }
 }
 
-#[async_trait]
-impl<S> FromRequestParts<S> for TokenClaims
-where
-    S: Send + Sync,
-{
-    type Rejection = AuthError;
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Extract the token from the authorization header
-        let TypedHeader(Authorization(bearer)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|_| AuthError::InvalidToken)?;
-        // Decode the user data
-        let token_data = decode::<TokenClaims>(bearer.token(), &KEYS.decoding, &Validation::default())
-            .map_err(|_| AuthError::InvalidToken)?;
-
-        Ok(token_data.claims)
-    }
-}
-
-impl IntoResponse for AuthError {
-    fn into_response(self) -> Response {
-        let (status, error_message) = match self {
-            AuthError::WrongCredentials => (StatusCode::UNAUTHORIZED, String::from("Wrong credentials")),
-            AuthError::MissingCredentials => (StatusCode::BAD_REQUEST, String::from("Missing credentials")),
-            AuthError::TokenCreation => (StatusCode::INTERNAL_SERVER_ERROR, String::from("Token creation error")),
-            AuthError::InvalidToken => (StatusCode::BAD_REQUEST, String::from("Invalid token")),
-            AuthError::Database(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {}", err))
-        };
-        let body = Json(json!({
-            "error": error_message,
-        }));
-        (status, body).into_response()
-    }
-}
-
-struct Keys {
-    encoding: EncodingKey,
-    decoding: DecodingKey,
-}
-
-impl Keys {
-    fn new(secret: &[u8]) -> Self {
-        Self {
-            encoding: EncodingKey::from_secret(secret),
-            decoding: DecodingKey::from_secret(secret),
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
 struct AuthBody {
     access_token: String,
     token_type: String,
-}
-
-#[derive(Debug)]
-enum AuthError {
-    WrongCredentials,
-    MissingCredentials,
-    TokenCreation,
-    InvalidToken,
-    Database(sqlx::Error),
 }
 
 pub struct AppState {
