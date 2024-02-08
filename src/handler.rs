@@ -12,7 +12,7 @@ use axum_extra::extract::{
     CookieJar,
 };
 use rand_core::OsRng;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::{
     auth::JWTAuthMiddleware,
@@ -24,10 +24,21 @@ use crate::{
 
 use redis::AsyncCommands;
 
+pub async fn not_found() -> (StatusCode, Json<Value>) {
+    let response = json!({
+        "status": "error",
+        "error": {
+            "message": "Not Found",
+            "code": 404,
+        }
+    });
+    (StatusCode::NOT_FOUND, Json(response))
+}
+
 pub async fn health_checker() -> impl IntoResponse {
     const MESSAGE: &str = "Rust and Axum Framework: JWT Access and Refresh Tokens";
 
-    let json_response = serde_json::json!({
+    let json_response = json!({
         "status": "success",
         "message": MESSAGE
     });
@@ -38,14 +49,14 @@ pub async fn health_checker() -> impl IntoResponse {
 pub async fn register(
     State(data): State<Arc<AppState>>,
     Json(body): Json<RegisterUserSchema>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let user_exists: Option<bool> =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
             .bind(body.email.to_owned().to_ascii_lowercase())
             .fetch_one(&data.db_pool)
             .await
             .map_err(|e| {
-                let error_response = serde_json::json!({
+                let error_response = json!({
                     "status": "fail",
                     "message": format!("Database error: {}", e),
                 });
@@ -54,7 +65,7 @@ pub async fn register(
 
     if let Some(exists) = user_exists {
         if exists {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "fail",
                 "message": "User with that email already exists",
             });
@@ -66,7 +77,7 @@ pub async fn register(
     let hashed_password = Argon2::default()
         .hash_password(body.password.as_bytes(), &salt)
         .map_err(|e| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "fail",
                 "message": format!("Error while hashing password: {}", e),
             });
@@ -84,14 +95,14 @@ pub async fn register(
         .fetch_one(&data.db_pool)
         .await
         .map_err(|e| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
             "status": "fail",
             "message": format!("Database error: {}", e),
         });
             (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
         })?;
 
-    let user_response = serde_json::json!({"status": "success","data": serde_json::json!({
+    let user_response = json!({"status": "success","data": serde_json::json!({
         "user": filter_user_record(&user)
     })});
 
@@ -101,7 +112,7 @@ pub async fn register(
 pub async fn login(
     State(data): State<Arc<AppState>>,
     Json(body): Json<LoginUserSchema>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let user = sqlx::query_as!(
         User,
         "SELECT * FROM users WHERE email = $1",
@@ -110,14 +121,14 @@ pub async fn login(
         .fetch_optional(&data.db_pool)
         .await
         .map_err(|e| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
             "status": "error",
             "message": format!("Database error: {}", e),
         });
             (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
         })?
         .ok_or_else(|| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
             "status": "fail",
             "message": "Invalid email or password",
         });
@@ -132,7 +143,7 @@ pub async fn login(
     };
 
     if !is_valid {
-        let error_response = serde_json::json!({
+        let error_response = json!({
             "status": "fail",
             "message": "Invalid email or password"
         });
@@ -207,14 +218,14 @@ pub async fn login(
 pub async fn refresh_access_token(
     cookie_jar: CookieJar,
     State(data): State<Arc<AppState>>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let message = "could not refresh access token";
 
     let refresh_token = cookie_jar
         .get("refresh_token")
         .map(|cookie| cookie.value().to_string())
         .ok_or_else(|| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "fail",
                 "message": message
             });
@@ -226,7 +237,7 @@ pub async fn refresh_access_token(
         {
             Ok(token_details) => token_details,
             Err(e) => {
-                let error_response = serde_json::json!({
+                let error_response = json!({
                     "status": "fail",
                     "message": format_args!("{:?}", e)
                 });
@@ -239,7 +250,7 @@ pub async fn refresh_access_token(
         .get_async_connection()
         .await
         .map_err(|e| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "error",
                 "message": format!("Redis error: {}", e),
             });
@@ -250,7 +261,7 @@ pub async fn refresh_access_token(
         .get::<_, String>(refresh_token_details.token_uuid.to_string())
         .await
         .map_err(|_| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "error",
                 "message": "Token is invalid or session has expired",
             });
@@ -258,7 +269,7 @@ pub async fn refresh_access_token(
         })?;
 
     let user_id_uuid = uuid::Uuid::parse_str(&redis_token_user_id).map_err(|_| {
-        let error_response = serde_json::json!({
+        let error_response = json!({
             "status": "error",
             "message": "Token is invalid or session has expired",
         });
@@ -269,7 +280,7 @@ pub async fn refresh_access_token(
         .fetch_optional(&data.db_pool)
         .await
         .map_err(|e| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "fail",
                 "message": format!("Error fetching user from database: {}", e),
             });
@@ -277,7 +288,7 @@ pub async fn refresh_access_token(
         })?;
 
     let user = user.ok_or_else(|| {
-        let error_response = serde_json::json!({
+        let error_response = json!({
             "status": "fail",
             "message": "The user belonging to this token no longer exists".to_string(),
         });
@@ -329,14 +340,14 @@ pub async fn logout(
     cookie_jar: CookieJar,
     Extension(auth_guard): Extension<JWTAuthMiddleware>,
     State(data): State<Arc<AppState>>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let message = "Token is invalid or session has expired";
 
     let refresh_token = cookie_jar
         .get("refresh_token")
         .map(|cookie| cookie.value().to_string())
         .ok_or_else(|| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "fail",
                 "message": message
             });
@@ -348,7 +359,7 @@ pub async fn logout(
         {
             Ok(token_details) => token_details,
             Err(e) => {
-                let error_response = serde_json::json!({
+                let error_response = json!({
                     "status": "fail",
                     "message": format_args!("{:?}", e)
                 });
@@ -361,7 +372,7 @@ pub async fn logout(
         .get_async_connection()
         .await
         .map_err(|e| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "error",
                 "message": format!("Redis error: {}", e),
             });
@@ -375,7 +386,7 @@ pub async fn logout(
         ])
         .await
         .map_err(|e| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "error",
                 "message": format_args!("{:?}", e)
             });
@@ -420,8 +431,8 @@ pub async fn logout(
 
 pub async fn get_me(
     Extension(jwtauth): Extension<JWTAuthMiddleware>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let json_response = serde_json::json!({
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
+    let json_response = json!({
         "status":  "success",
         "data": serde_json::json!({
             "user": filter_user_record(&jwtauth.user)
@@ -448,9 +459,9 @@ fn generate_token(
     user_id: uuid::Uuid,
     max_age: i64,
     private_key: String,
-) -> Result<TokenDetails, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<TokenDetails, (StatusCode, Json<Value>)> {
     token::generate_jwt_token(user_id, max_age, private_key).map_err(|e| {
-        let error_response = serde_json::json!({
+        let error_response = json!({
             "status": "error",
             "message": format!("error generating token: {}", e),
         });
@@ -462,13 +473,13 @@ async fn save_token_data_to_redis(
     data: &Arc<AppState>,
     token_details: &TokenDetails,
     max_age: i64,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(), (StatusCode, Json<Value>)> {
     let mut redis_client = data
         .redis_client
         .get_async_connection()
         .await
         .map_err(|e| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "error",
                 "message": format!("Redis error: {}", e),
             });
@@ -482,7 +493,7 @@ async fn save_token_data_to_redis(
         )
         .await
         .map_err(|e| {
-            let error_response = serde_json::json!({
+            let error_response = json!({
                 "status": "error",
                 "message": format_args!("{}", e),
             });

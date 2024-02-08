@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{model::User, token, AppState};
 use redis::AsyncCommands;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
@@ -23,7 +24,7 @@ pub struct ErrorResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct JWTAuthMiddleware {
     pub user: User,
-    pub access_token_uuid: uuid::Uuid,
+    pub access_token_uuid: Uuid,
 }
 
 pub async fn auth(
@@ -68,7 +69,7 @@ pub async fn auth(
             }
         };
 
-    let access_token_uuid = uuid::Uuid::parse_str(&access_token_details.token_uuid.to_string())
+    let access_token_uuid = Uuid::parse_str(&access_token_details.token_uuid.to_string())
         .map_err(|_| {
             let error_response = ErrorResponse {
                 status: "fail",
@@ -100,7 +101,7 @@ pub async fn auth(
             (StatusCode::UNAUTHORIZED, Json(error_response))
         })?;
 
-    let user_id_uuid = uuid::Uuid::parse_str(&redis_token_user_id).map_err(|_| {
+    let user_id_uuid = Uuid::parse_str(&redis_token_user_id).map_err(|_| {
         let error_response = ErrorResponse {
             status: "fail",
             message: "Token is invalid or session has expired".to_string(),
