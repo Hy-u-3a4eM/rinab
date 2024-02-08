@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct User {
     pub id: uuid::Uuid,
     pub name: String,
-    pub username: String,
+    pub email: String,
     pub password: String,
     pub role: String,
     pub photo: String,
@@ -15,13 +15,6 @@ pub struct User {
     pub created_at: Option<DateTime<Utc>>,
     #[serde(rename = "updatedAt")]
     pub updated_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TokenClaims {
-    pub sub: String,
-    pub iat: usize,
-    pub exp: usize,
 }
 
 #[derive(Debug, Deserialize)]

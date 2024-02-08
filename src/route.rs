@@ -1,20 +1,35 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
+    middleware,
     routing::{get, post},
+    Router,
 };
 
-use crate::{AppState,
+use crate::{
     handler::{
-        get_user,
-        login,
+        get_me, health_checker, login, logout,
+        refresh_access_token, register,
     },
+    auth::auth,
+    AppState,
 };
 
 pub fn create_router(app_state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/user", get(get_user))
+        .route("/health_checker", get(health_checker))
+        .route("/register", post(register))
         .route("/login", post(login))
+        .route("/refresh", get(refresh_access_token))
+        .route(
+            "/logout",
+            get(logout)
+                .route_layer(middleware::from_fn_with_state(app_state.clone(), auth)),
+        )
+        .route(
+            "/me",
+            get(get_me)
+                .route_layer(middleware::from_fn_with_state(app_state.clone(), auth)),
+        )
         .with_state(app_state)
 }

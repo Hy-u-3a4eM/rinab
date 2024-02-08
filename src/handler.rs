@@ -3,23 +3,29 @@ use std::sync::Arc;
 use argon2::{password_hash::SaltString, Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     extract::State,
-    http::{header, Response, StatusCode},
+    http::{header, HeaderMap, Response, StatusCode},
     response::IntoResponse,
     Extension, Json,
 };
-use axum_extra::extract::cookie::{Cookie, SameSite};
-use jsonwebtoken::{encode, EncodingKey, Header};
+use axum_extra::extract::{
+    cookie::{Cookie, SameSite},
+    CookieJar,
+};
 use rand_core::OsRng;
 use serde_json::json;
 
 use crate::{
-    model::{LoginUserSchema, RegisterUserSchema, TokenClaims, User},
+    auth::JWTAuthMiddleware,
+    model::{LoginUserSchema, RegisterUserSchema, User},
     response::FilteredUser,
+    token::{self, TokenDetails},
     AppState,
 };
 
-pub async fn health_checker_handler() -> impl IntoResponse {
-    const MESSAGE: &str = "JWT Authentication in Rust using Axum, Postgres, and SQLX";
+use redis::AsyncCommands;
+
+pub async fn health_checker() -> impl IntoResponse {
+    const MESSAGE: &str = "Rust and Axum Framework: JWT Access and Refresh Tokens";
 
     let json_response = serde_json::json!({
         "status": "success",
@@ -29,7 +35,7 @@ pub async fn health_checker_handler() -> impl IntoResponse {
     Json(json_response)
 }
 
-pub async fn register_user_handler(
+pub async fn register(
     State(data): State<Arc<AppState>>,
     Json(body): Json<RegisterUserSchema>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -92,7 +98,7 @@ pub async fn register_user_handler(
     Ok(Json(user_response))
 }
 
-pub async fn login_user_handler(
+pub async fn login(
     State(data): State<Arc<AppState>>,
     Json(body): Json<LoginUserSchema>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -133,58 +139,292 @@ pub async fn login_user_handler(
         return Err((StatusCode::BAD_REQUEST, Json(error_response)));
     }
 
-    let now = chrono::Utc::now();
-    let iat = now.timestamp() as usize;
-    let exp = (now + chrono::Duration::minutes(60)).timestamp() as usize;
-    let claims: TokenClaims = TokenClaims {
-        sub: user.id.to_string(),
-        exp,
-        iat,
-    };
+    let access_token_details = generate_token(
+        user.id,
+        data.env.access_token_max_age,
+        data.env.access_token_private_key.to_owned(),
+    )?;
+    let refresh_token_details = generate_token(
+        user.id,
+        data.env.refresh_token_max_age,
+        data.env.refresh_token_private_key.to_owned(),
+    )?;
 
-    let token = encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(data.env.jwt_secret.as_ref()),
+    save_token_data_to_redis(&data, &access_token_details, data.env.access_token_max_age).await?;
+    save_token_data_to_redis(
+        &data,
+        &refresh_token_details,
+        data.env.refresh_token_max_age,
     )
-        .unwrap();
+        .await?;
 
-    let cookie = Cookie::build(("token", token.to_owned()))
+    let access_cookie = Cookie::build(
+        ("access_token",
+         access_token_details.token.clone().unwrap_or_default()),
+    )
         .path("/")
-        .max_age(time::Duration::hours(1))
+        .max_age(time::Duration::minutes(data.env.access_token_max_age * 60))
         .same_site(SameSite::Lax)
-        .http_only(true)
-        .finish();
+        .http_only(true);
 
-    let mut response = Response::new(json!({"status": "success", "token": token}).to_string());
-    response
-        .headers_mut()
-        .insert(header::SET_COOKIE, cookie.to_string().parse().unwrap());
+    let refresh_cookie = Cookie::build(
+        ("refresh_token",
+         refresh_token_details.token.unwrap_or_default()),
+    )
+        .path("/")
+        .max_age(time::Duration::minutes(data.env.refresh_token_max_age * 60))
+        .same_site(SameSite::Lax)
+        .http_only(true);
+
+    let logged_in_cookie = Cookie::build(("logged_in", "true"))
+        .path("/")
+        .max_age(time::Duration::minutes(data.env.access_token_max_age * 60))
+        .same_site(SameSite::Lax)
+        .http_only(false);
+
+    let mut response = Response::new(
+        json!({"status": "success", "access_token": access_token_details.token.unwrap()})
+            .to_string(),
+    );
+    let mut headers = HeaderMap::new();
+    headers.append(
+        header::SET_COOKIE,
+        access_cookie.to_string().parse().unwrap(),
+    );
+    headers.append(
+        header::SET_COOKIE,
+        refresh_cookie.to_string().parse().unwrap(),
+    );
+    headers.append(
+        header::SET_COOKIE,
+        logged_in_cookie.to_string().parse().unwrap(),
+    );
+
+    response.headers_mut().extend(headers);
     Ok(response)
 }
 
-pub async fn logout_handler() -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let cookie = Cookie::build(("token", ""))
+pub async fn refresh_access_token(
+    cookie_jar: CookieJar,
+    State(data): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let message = "could not refresh access token";
+
+    let refresh_token = cookie_jar
+        .get("refresh_token")
+        .map(|cookie| cookie.value().to_string())
+        .ok_or_else(|| {
+            let error_response = serde_json::json!({
+                "status": "fail",
+                "message": message
+            });
+            (StatusCode::FORBIDDEN, Json(error_response))
+        })?;
+
+    let refresh_token_details =
+        match token::verify_jwt_token(data.env.refresh_token_public_key.to_owned(), &refresh_token)
+        {
+            Ok(token_details) => token_details,
+            Err(e) => {
+                let error_response = serde_json::json!({
+                    "status": "fail",
+                    "message": format_args!("{:?}", e)
+                });
+                return Err((StatusCode::UNAUTHORIZED, Json(error_response)));
+            }
+        };
+
+    let mut redis_client = data
+        .redis_client
+        .get_async_connection()
+        .await
+        .map_err(|e| {
+            let error_response = serde_json::json!({
+                "status": "error",
+                "message": format!("Redis error: {}", e),
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
+        })?;
+
+    let redis_token_user_id = redis_client
+        .get::<_, String>(refresh_token_details.token_uuid.to_string())
+        .await
+        .map_err(|_| {
+            let error_response = serde_json::json!({
+                "status": "error",
+                "message": "Token is invalid or session has expired",
+            });
+            (StatusCode::UNAUTHORIZED, Json(error_response))
+        })?;
+
+    let user_id_uuid = uuid::Uuid::parse_str(&redis_token_user_id).map_err(|_| {
+        let error_response = serde_json::json!({
+            "status": "error",
+            "message": "Token is invalid or session has expired",
+        });
+        (StatusCode::UNAUTHORIZED, Json(error_response))
+    })?;
+
+    let user = sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", user_id_uuid)
+        .fetch_optional(&data.db_pool)
+        .await
+        .map_err(|e| {
+            let error_response = serde_json::json!({
+                "status": "fail",
+                "message": format!("Error fetching user from database: {}", e),
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
+        })?;
+
+    let user = user.ok_or_else(|| {
+        let error_response = serde_json::json!({
+            "status": "fail",
+            "message": "The user belonging to this token no longer exists".to_string(),
+        });
+        (StatusCode::UNAUTHORIZED, Json(error_response))
+    })?;
+
+    let access_token_details = generate_token(
+        user.id,
+        data.env.access_token_max_age,
+        data.env.access_token_private_key.to_owned(),
+    )?;
+
+    save_token_data_to_redis(&data, &access_token_details, data.env.access_token_max_age).await?;
+
+    let access_cookie = Cookie::build(
+        ("access_token",
+         access_token_details.token.clone().unwrap_or_default()),
+    )
         .path("/")
-        .max_age(time::Duration::hours(-1))
+        .max_age(time::Duration::minutes(data.env.access_token_max_age * 60))
         .same_site(SameSite::Lax)
-        .http_only(true)
-        .finish();
+        .http_only(true);
+
+    let logged_in_cookie = Cookie::build(("logged_in", "true"))
+        .path("/")
+        .max_age(time::Duration::minutes(data.env.access_token_max_age * 60))
+        .same_site(SameSite::Lax)
+        .http_only(false);
+
+    let mut response = Response::new(
+        json!({"status": "success", "access_token": access_token_details.token.unwrap()})
+            .to_string(),
+    );
+    let mut headers = HeaderMap::new();
+    headers.append(
+        header::SET_COOKIE,
+        access_cookie.to_string().parse().unwrap(),
+    );
+    headers.append(
+        header::SET_COOKIE,
+        logged_in_cookie.to_string().parse().unwrap(),
+    );
+
+    response.headers_mut().extend(headers);
+    Ok(response)
+}
+
+pub async fn logout(
+    cookie_jar: CookieJar,
+    Extension(auth_guard): Extension<JWTAuthMiddleware>,
+    State(data): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let message = "Token is invalid or session has expired";
+
+    let refresh_token = cookie_jar
+        .get("refresh_token")
+        .map(|cookie| cookie.value().to_string())
+        .ok_or_else(|| {
+            let error_response = serde_json::json!({
+                "status": "fail",
+                "message": message
+            });
+            (StatusCode::FORBIDDEN, Json(error_response))
+        })?;
+
+    let refresh_token_details =
+        match token::verify_jwt_token(data.env.refresh_token_public_key.to_owned(), &refresh_token)
+        {
+            Ok(token_details) => token_details,
+            Err(e) => {
+                let error_response = serde_json::json!({
+                    "status": "fail",
+                    "message": format_args!("{:?}", e)
+                });
+                return Err((StatusCode::UNAUTHORIZED, Json(error_response)));
+            }
+        };
+
+    let mut redis_client = data
+        .redis_client
+        .get_async_connection()
+        .await
+        .map_err(|e| {
+            let error_response = serde_json::json!({
+                "status": "error",
+                "message": format!("Redis error: {}", e),
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
+        })?;
+
+    redis_client
+        .del(&[
+            refresh_token_details.token_uuid.to_string(),
+            auth_guard.access_token_uuid.to_string(),
+        ])
+        .await
+        .map_err(|e| {
+            let error_response = serde_json::json!({
+                "status": "error",
+                "message": format_args!("{:?}", e)
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
+        })?;
+
+    let access_cookie = Cookie::build(("access_token", ""))
+        .path("/")
+        .max_age(time::Duration::minutes(-1))
+        .same_site(SameSite::Lax)
+        .http_only(true);
+    let refresh_cookie = Cookie::build(("refresh_token", ""))
+        .path("/")
+        .max_age(time::Duration::minutes(-1))
+        .same_site(SameSite::Lax)
+        .http_only(true);
+
+    let logged_in_cookie = Cookie::build(("logged_in", "true"))
+        .path("/")
+        .max_age(time::Duration::minutes(-1))
+        .same_site(SameSite::Lax)
+        .http_only(false);
+
+    let mut headers = HeaderMap::new();
+    headers.append(
+        header::SET_COOKIE,
+        access_cookie.to_string().parse().unwrap(),
+    );
+    headers.append(
+        header::SET_COOKIE,
+        refresh_cookie.to_string().parse().unwrap(),
+    );
+    headers.append(
+        header::SET_COOKIE,
+        logged_in_cookie.to_string().parse().unwrap(),
+    );
 
     let mut response = Response::new(json!({"status": "success"}).to_string());
-    response
-        .headers_mut()
-        .insert(header::SET_COOKIE, cookie.to_string().parse().unwrap());
+    response.headers_mut().extend(headers);
     Ok(response)
 }
 
-pub async fn get_me_handler(
-    Extension(user): Extension<User>,
+pub async fn get_me(
+    Extension(jwtauth): Extension<JWTAuthMiddleware>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let json_response = serde_json::json!({
         "status":  "success",
         "data": serde_json::json!({
-            "user": filter_user_record(&user)
+            "user": filter_user_record(&jwtauth.user)
         })
     });
 
@@ -194,9 +434,59 @@ pub async fn get_me_handler(
 fn filter_user_record(user: &User) -> FilteredUser {
     FilteredUser {
         id: user.id.to_string(),
-        username: user.username.to_owned(),
+        email: user.email.to_owned(),
         name: user.name.to_owned(),
+        photo: user.photo.to_owned(),
+        role: user.role.to_owned(),
+        verified: user.verified,
         createdAt: user.created_at.unwrap(),
         updatedAt: user.updated_at.unwrap(),
     }
+}
+
+fn generate_token(
+    user_id: uuid::Uuid,
+    max_age: i64,
+    private_key: String,
+) -> Result<TokenDetails, (StatusCode, Json<serde_json::Value>)> {
+    token::generate_jwt_token(user_id, max_age, private_key).map_err(|e| {
+        let error_response = serde_json::json!({
+            "status": "error",
+            "message": format!("error generating token: {}", e),
+        });
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
+    })
+}
+
+async fn save_token_data_to_redis(
+    data: &Arc<AppState>,
+    token_details: &TokenDetails,
+    max_age: i64,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let mut redis_client = data
+        .redis_client
+        .get_async_connection()
+        .await
+        .map_err(|e| {
+            let error_response = serde_json::json!({
+                "status": "error",
+                "message": format!("Redis error: {}", e),
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
+        })?;
+    redis_client
+        .set_ex(
+            token_details.token_uuid.to_string(),
+            token_details.user_id.to_string(),
+            (max_age * 60) as u64,
+        )
+        .await
+        .map_err(|e| {
+            let error_response = serde_json::json!({
+                "status": "error",
+                "message": format_args!("{}", e),
+            });
+            (StatusCode::UNPROCESSABLE_ENTITY, Json(error_response))
+        })?;
+    Ok(())
 }

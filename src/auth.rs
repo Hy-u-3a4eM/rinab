@@ -109,7 +109,7 @@ pub async fn auth(
     })?;
 
     let user = sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", user_id_uuid)
-        .fetch_optional(&data.db)
+        .fetch_optional(&data.db_pool)
         .await
         .map_err(|e| {
             let error_response = ErrorResponse {
