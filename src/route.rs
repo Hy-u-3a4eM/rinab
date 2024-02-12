@@ -8,7 +8,7 @@ use axum::{
 
 use crate::{
     handler::{
-        not_found, get_me, health_checker, login,
+        not_found, send, health_checker, login,
         logout, refresh_access_token, register,
     },
     auth::auth,
@@ -28,7 +28,12 @@ pub fn create_router(app_state: Arc<AppState>) -> Router {
         )
         .route(
             "/me",
-            get(get_me)
+            get(send)
+                .route_layer(middleware::from_fn_with_state(app_state.clone(), auth)),
+        )
+        .route(
+            "/send",
+            post(send)
                 .route_layer(middleware::from_fn_with_state(app_state.clone(), auth)),
         )
         .with_state(app_state);

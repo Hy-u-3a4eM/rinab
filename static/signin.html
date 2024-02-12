@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+
+        .container {
+            width: 400px;
+            margin: 0 auto;
+            padding: 20px;
+            border: 1px solid #ccc;
+            background: linear-gradient(to right, #f0f0f0, #e6e6e6);
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+
+        .form-group {
+            margin-bottom: 10px;
+        }
+
+        label {
+            display: block;
+            font-weight: bold;
+        }
+
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            background: #04AA6D;
+            color: white;
+            cursor: pointer;
+        }
+
+        .btn:hover {
+            opacity: 0.8;
+        }
+
+        .btn-secondary {
+            background: #f44336;
+        }
+
+        .message {
+            text-align: center;
+            margin-top: 10px;
+        }
+
+        a {
+            color: #04AA6D;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Вход</h1>
+    <form action="/action_page.php" method="post">
+        <div class="form-group">
+            <label for="uname">Логин</label>
+            <input type="text" id="uname" name="uname" placeholder="Введите логин" required>
+        </div>
+        <div class="form-group">
+            <label for="psw">Пароль</label>
+            <input type="password" id="psw" name="psw" placeholder="Введите пароль" required>
+        </div>
+        <button type="submit" class="btn">Войти</button>
+        <button type="button" class="btn btn-secondary">Регистрация</button>
+    </form>
+    <p class="message">Забыли пароль? <a href="#">Восстановить</a></p>
+</div>
+</body>
+</html>

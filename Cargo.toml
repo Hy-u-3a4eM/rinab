@@ -31,3 +31,4 @@ argon2 = "0.5.3"
 base64 = "0.21.7"
 redis = { version = "0.24.0", features = ["tokio-comp"] }
 dotenv = "0.15.0"
+bigdecimal = "0.4.2"

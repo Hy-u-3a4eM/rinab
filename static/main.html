@@ -1,0 +1,82 @@
+<html>
+
+<head>
+    <title>Банк-сервис</title>
+    <!-- Подключаем Bootstrap для стилизации -->
+    <link rel="stylesheet" href="^4^">
+</head>
+<body>
+<div class="container">
+    <h1>Банк-сервис</h1>
+    <p>Введите сумму, которую вы хотите отправить, и имя получателя.</p>
+    <form id="send-form">
+        <div class="form-group">
+            <label for="amount">Сумма</label>
+            <input type="number" id="amount" name="amount" class="form-control" min="0" required>
+        </div>
+        <div class="form-group">
+            <label for="recipient">Получатель</label>
+            <input type="text" id="recipient" name="recipient" class="form-control" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Отправить</button>
+    </form>
+    <div id="result" class="alert" role="alert" style="display: none;"></div>
+</div>
+<!-- Подключаем jQuery для работы с DOM и AJAX -->
+<script src="^5^"></script>
+<script>
+    // Получаем элементы формы и результата
+    var form = document.getElementById("send-form");
+    var result = document.getElementById("result");
+
+    // Добавляем обработчик события отправки формы
+    form.addEventListener("submit", function(event) {
+        // Отменяем действие по умолчанию (перезагрузку страницы)
+        event.preventDefault();
+
+        // Получаем данные из формы
+        var amount = form.elements["amount"].value;
+        var recipient = form.elements["recipient"].value;
+
+        // Формируем объект с данными для отправки
+        var data = {
+            amount: amount,
+            recipient: recipient
+        };
+
+        // Отправляем AJAX-запрос на эндпоинт send нашего API
+        $.ajax({
+            url: "/api/send",
+            type: "POST",
+            data: JSON.stringify(data),
+            contentType: "application/json",
+            success: function(response) {
+                // Если запрос успешен, показываем сообщение об успехе
+                result.className = "alert alert-success";
+                result.textContent = "Вы успешно отправили " + amount + " рублей пользователю " + recipient + ".";
+                result.style.display = "block";
+            },
+            error: function(error) {
+                // Если запрос неудачен, показываем сообщение об ошибке
+                result.className = "alert alert-danger";
+                result.textContent = "Произошла ошибка: " + error.responseText;
+                result.style.display = "block";
+            }
+        });
+    });
+</script>
+</body>
+</html>
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Document</title>
+</head>
+<body>
+
+</body>
+</html>

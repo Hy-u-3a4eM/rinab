@@ -1,13 +1,23 @@
 use chrono::prelude::*;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Serialize)]
+pub struct Transaction {
+    recipient: String,
+    amount: f64,
+    date: String,
+}
 
 #[allow(non_snake_case)]
 #[derive(Debug, Deserialize, sqlx::FromRow, Serialize, Clone)]
 pub struct User {
-    pub id: uuid::Uuid,
+    pub id: Uuid,
     pub name: String,
     pub email: String,
     pub password: String,
+    pub balance: bigdecimal::BigDecimal,
+    pub txs: Vec<Transaction>,
     pub role: String,
     pub photo: String,
     pub verified: bool,
@@ -28,4 +38,9 @@ pub struct RegisterUserSchema {
 pub struct LoginUserSchema {
     pub email: String,
     pub password: String,
+}
+
+pub struct TransactionSchema {
+    pub recipient: String,
+    pub amount: f64,
 }

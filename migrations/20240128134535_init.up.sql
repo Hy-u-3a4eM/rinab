@@ -7,6 +7,7 @@ CREATE TABLE
         id UUID NOT NULL PRIMARY KEY DEFAULT (uuid_generate_v4()),
         name VARCHAR(100) NOT NULL,
         email VARCHAR(255) NOT NULL UNIQUE,
+        balance NUMERIC(10, 2) CHECK (balance >=0) default 0,
         photo VARCHAR NOT NULL DEFAULT 'default.png',
         verified BOOLEAN NOT NULL DEFAULT FALSE,
         password VARCHAR(100) NOT NULL,

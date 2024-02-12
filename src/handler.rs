@@ -23,6 +23,8 @@ use crate::{
 };
 
 use redis::AsyncCommands;
+use sqlx::query;
+use crate::model::{Transaction, TransactionSchema};
 
 pub async fn not_found() -> (StatusCode, Json<Value>) {
     let response = json!({
@@ -30,7 +32,7 @@ pub async fn not_found() -> (StatusCode, Json<Value>) {
         "error": {
             "message": "Not Found",
             "code": 404,
-        }
+        },
     });
     (StatusCode::NOT_FOUND, Json(response))
 }
@@ -102,7 +104,7 @@ pub async fn register(
             (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
         })?;
 
-    let user_response = json!({"status": "success","data": serde_json::json!({
+    let user_response = json!({"status": "ok","data": serde_json::json!({
         "user": filter_user_record(&user)
     })});
 
@@ -122,16 +124,16 @@ pub async fn login(
         .await
         .map_err(|e| {
             let error_response = json!({
-            "status": "error",
-            "message": format!("Database error: {}", e),
-        });
+                "status": "error",
+                "message": format!("Database error: {}", e),
+            });
             (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
         })?
         .ok_or_else(|| {
             let error_response = json!({
-            "status": "fail",
-            "message": "Invalid email or password",
-        });
+                "status": "fail",
+                "message": "Invalid email or password",
+            });
             (StatusCode::BAD_REQUEST, Json(error_response))
         })?;
 
@@ -144,8 +146,10 @@ pub async fn login(
 
     if !is_valid {
         let error_response = json!({
-            "status": "fail",
-            "message": "Invalid email or password"
+            "status": "error",
+            "error": {
+                "message": "Invalid email or password",
+            },
         });
         return Err((StatusCode::BAD_REQUEST, Json(error_response)));
     }
@@ -433,9 +437,50 @@ pub async fn get_me(
     Extension(jwtauth): Extension<JWTAuthMiddleware>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let json_response = json!({
-        "status":  "success",
-        "data": serde_json::json!({
+        "status": "ok",
+        "data": json!({
             "user": filter_user_record(&jwtauth.user)
+        })
+    });
+
+    Ok(Json(json_response))
+}
+
+pub async fn send(
+    Extension(JWTAuth): Extension<JWTAuthMiddleware>,
+    State(data): State<Arc<AppState>>,
+    Json(mut tx): Json<TransactionSchema>,
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
+    let user = &JWTAuth.user;
+
+    let recipient = sqlx::query_as!(User, "SELECT * FROM users WHERE name = $1", name)
+        .fetch_one(&data.db_pool) // Получаем одну строку или ошибку, если нет такого пользователя
+        .await
+        .map_err(|e| {
+            let error_response = json!({
+                "status": "error",
+                "message": format!("Database error: {}", e),
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response))
+        })?
+        .ok_or_else(|| {
+            let error_response = json!({
+                "status": "fail",
+                "message": "Invalid email or password",
+            });
+            (StatusCode::BAD_REQUEST, Json(error_response))
+        })?;
+
+    sqlx::query("UPDATE users SET tx = jsonb_insert(tx, '{-1}', ?) WHERE id = ?")
+        .bind(r#"{"amount": 100, "date": "2024-02-09"}"#)
+        .bind(recipient.id.to_string())
+        .execute(&mut tx)
+        .await?;
+
+    let json_response = json!({
+        "status": "ok",
+        "data": serde_json::json!({
+            "user": filter_user_record(&JWTAuth.user)
         })
     });
 
@@ -447,11 +492,13 @@ fn filter_user_record(user: &User) -> FilteredUser {
         id: user.id.to_string(),
         email: user.email.to_owned(),
         name: user.name.to_owned(),
+        txs: user.txs.iter().to_owned().collect(),
         photo: user.photo.to_owned(),
         role: user.role.to_owned(),
         verified: user.verified,
         createdAt: user.created_at.unwrap(),
         updatedAt: user.updated_at.unwrap(),
+        balance: user.balance.to_owned(),
     }
 }
 
